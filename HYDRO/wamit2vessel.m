@@ -1,9 +1,9 @@
-function vessel = wamit2vessel(filename,T_draught,Lpp,Boa,plot_flag)
-% wamit2vessel reads data from WAMIT output files and store the data in 
+function vessel = wamit2vessel(filename,T_draught,Lpp,Boa,plot_flag,rho_alt1)
+% wamit2vessel reads data from WAMIT output files and store the data in
 %   vesselname.mat using the MSS vessel structure.
 %
-%   vessel = wamit2vessel(filename) 
-% 
+%   vessel = wamit2vessel(filename)
+%
 % The Wamit GDF-file must be defined in GLOBAL COORDINATES, i.e. origin 
 % [Lpp/2 B/2 WL], see the Wamit manual. The axes are transformed from WAMIT
 % axes to Forward-Starboard-Down (FSD) axes. 
@@ -45,6 +45,10 @@ function vessel = wamit2vessel(filename,T_draught,Lpp,Boa,plot_flag)
 %                            '0001' plot wave drift forces
 %                            '0000' NO PLOT
 %                            '1111' PLOT ALL
+%   rho_alt1 (optionally):   water density (kg/m3) for FRC-file alternative
+%                            1, which does not carry a density value.
+%                            Default: 1025 (seawater). Ignored for
+%                            alternative 2, which reads RHO from the file.
 %
 % Outputs:
 % vessel contains data in the following form:
@@ -103,10 +107,19 @@ function vessel = wamit2vessel(filename,T_draught,Lpp,Boa,plot_flag)
 %            2023-04-17 Added a correction for LCF when computing GM_L
 %            2026-09-27 Removed viscous.m; power-based viscous damping is
 %                       computed separately by computeManeuveringModel
+%            2026-10-08 FRC-file alternative detected from file structure,
+%                       not from the magnitude of frc(5,1) (a light body's
+%                       alternative-2 mass can be under 1000 in whichever
+%                       units the file uses); rho_alt1 added as an
+%                       optional input in place of a hard-coded 1025 for
+%                       alternative 1, which carries no density (E. Krizman)
 
 %%
 if ~exist('plot_flag')
 	plot_flag = '1000';
+end
+if ~exist('rho_alt1')
+    rho_alt1 = 1025;
 end
 
 disp(' ');
@@ -133,8 +146,8 @@ if nargin == 1
     Lpp       = input('Length between perpendiculars L_{pp}(m)    : ');
     Boa       = input('Breadth (m)                                : ');
     
-elseif nargin == 4 || nargin == 5  % Lpp, B and T_draught are specified in call
-     vesselfile = filename; 
+elseif nargin == 4 || nargin == 5 || nargin == 6  % Lpp, B and T_draught are specified in call
+     vesselfile = filename;
 else
     error('wrong number of input arguments');
 end
@@ -205,10 +218,10 @@ if exist([filename '.frc'])
     frcfile = [filename '.frc'];
     frc = dlmread(frcfile,'',1,0);
 
-    if frc(5,1) < 1000                   % FRC file alternative 1
+    if frcFileAlternative(frcfile) == 1   % FRC file alternative 1
 
         FRC_ALT = 1;
-        
+
         VCG = frc(2,1);
         xg = 0;
         yg = 0;
@@ -217,7 +230,7 @@ if exist([filename '.frc'])
         vessel.main.k55 = frc(4,2);
         vessel.main.k66 = frc(5,3);
         vessel.main.k46 = frc(3,3);
-        vessel.main.rho = 1025;        
+        vessel.main.rho = rho_alt1;
 
     else                                  % FRC file alternative 2
 
@@ -742,3 +755,36 @@ save(vesselfile,'vessel');
 disp(['Simulink structure <vessel> has been saved to: ' vesselfile '.mat']);
 disp('-------------------------------------------------------------------')
 
+end
+
+%--------------------------------------------------------------------------
+%% FRC-file alternative, from the file's structure
+%--------------------------------------------------------------------------
+function alt = frcFileAlternative(frcfile)
+% frcFileAlternative tells WAMIT FRC-file alternative 1 from alternative 2
+% (Wamit manual, Force Control File) by structure, not by the magnitude of
+% any one value: a light body's alternative-2 mass (frc(5,1)) can be under
+% 1000 in whichever units the file uses, which the previous "frc(5,1) <
+% 1000" test read as alternative 1.
+%
+% Both alternatives open with the same two lines (IOPTN flags, then VCG
+% for alternative 1 or RHO for alternative 2) and a three-number third
+% line (the first row of the 3x3 radius-of-gyration matrix for
+% alternative 1, or the [xg yg zg] centre of gravity for alternative 2).
+% The fourth line is where they diverge: alternative 1 continues the
+% radius-of-gyration matrix with three more numbers, alternative 2 has the
+% single-number IMASS flag that precedes its 6x6 mass matrix. This
+% function reads that fourth data line from the raw text (dlmread pads a
+% short row with zeros, which would make the flag indistinguishable from
+% a three-number row whose last two entries are zero) and returns 1 or 2.
+
+lines = regexp(fileread(frcfile), '\r\n|\r|\n', 'split');
+lines = lines(~cellfun(@(s) isempty(strtrim(s)), lines));
+row4 = sscanf(lines{5}, '%f');  % line 1 is the title; data starts at line 2
+if numel(row4) >= 3
+    alt = 1;
+else
+    alt = 2;
+end
+
+end
