@@ -1,4 +1,4 @@
-function [xdot,U,M,B_prop,n_min,n_max] = otter(x,n,mp,rp,V_c,beta_c)
+function [xdot,U,M,B_prop,n_min,n_max] = otter(x,n,mp,rp,V_c,beta_c,currentModel)
 % [xdot,U,M,B_prop,n_min,n_max] = otter(x,n,mp,rp,V_c,beta_c) returns the
 % time derivative xdot of the state vector, the speed U in m/s, the 6x6
 % mass matrix M, the 2x2 propeller input matrix B_prop, and the physical
@@ -32,6 +32,10 @@ function [xdot,U,M,B_prop,n_min,n_max] = otter(x,n,mp,rp,V_c,beta_c)
 %  rp = [xp, yp, zp]' (m) is the location of the payload w.r.t. the CO
 %  V_c:     ocean current speed (m/s)
 %  beta_c:  ocean current direction (rad)
+%  currentModel: (optional) current model, see currentVelocity.m:
+%           'full_attitude' (default), the current rotated to BODY by the
+%           roll, pitch and yaw angles, or 'heading_only_rotation_rate',
+%           the current model used before 2026-10-08 (yaw angle only)
 %
 % The coordinate origin CO is chosen midships on the centerline. The 
 % draft is T = 13.4 cm when the payload mp = 0. This corresponds to z = 0. 
@@ -53,6 +57,9 @@ function [xdot,U,M,B_prop,n_min,n_max] = otter(x,n,mp,rp,V_c,beta_c)
 %
 %   xdot = otter(x,n,mp,rp,V_c,beta_c)
 %       Return xdot, 2-D currents.
+%
+%   xdot = otter(x,n,mp,rp,V_c,beta_c,'heading_only_rotation_rate')
+%       Return xdot, 2-D currents rotated by the yaw angle only.
 %
 % M-file Simulators:
 %   SIMotter.m : Script demonstrating 3-D ALOS path-following control.
@@ -77,10 +84,16 @@ function [xdot,U,M,B_prop,n_min,n_max] = otter(x,n,mp,rp,V_c,beta_c)
 %   2026-04-20 : Correct payload lever arm moment of inertia.
 %   2026-06-27 : Added output arguments for propeller speed limits n_min and n_max.
 %   2026-10-07 : Corrected KB to use the pontoon waterplane area (E. Krizman)
+%   2026-10-08 : Ocean currents from currentVelocity.m, rotated by the full
+%                attitude. currentModel = 'heading_only_rotation_rate'
+%                gives the previous current model (E. Krizman)
 
 if nargin == 0
     x = zeros(12,1); n = zeros(2,1); mp=25; rp = zeros(3,1); V_c=0; beta_c=0;
 end 
+if nargin < 7 || isempty(currentModel)
+    currentModel = 'full_attitude';
+end
 
 % Check of input and state dimensions
 if (length(x) ~= 12),error('x vector must have dimension 12!'); end
@@ -110,12 +123,9 @@ Cb_pont = 0.4;      % block coefficient, computed from m = 55 kg
 nu = x(1:6);  nu1 = x(1:3); nu2 = x(4:6);   % velocity vectors
 eta = x(7:12);                              % positions
 U = sqrt(nu(1)^2 + nu(2)^2 + nu(3)^2);      % speed
-u_c = V_c * cos(beta_c - eta(6));           % current surge velocity
-v_c = V_c * sin(beta_c - eta(6));           % current sway velocity
-nu_c = [u_c v_c 0 0 0 0 ]';                 % current velocity vector
+[nu_c, nu_c_dot] = currentVelocity(V_c, beta_c, 0, eta(4:6), nu2, ...
+    currentModel);                          % current velocity, acceleration
 nu_r = nu - nu_c;                           % relative velocity vector
-nu_c_dot = [-Smtrx(nu2) * nu_c(1:3)         % current acceleration vector
-             zeros(3,1)              ];
 
 % Inertia dyadic, volume displacement, and draft
 nabla = (m+mp)/rho;                         % volume
